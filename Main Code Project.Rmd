@@ -1,0 +1,484 @@
+---
+title: "final project"
+output: html_document
+date: "2025-05-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+
+
+```{r}
+packages <- c(
+  "fredr",
+  "purrr",
+  "dplyr",
+  "readxl",
+  "stringr",
+  "ggplot2",
+  "scales",
+  "forcats",
+  "choroplethr",
+  "choroplethrMaps",
+  "tidyr"
+)
+
+# 1. Install any packages that are not already installed
+to_install <- packages[!packages %in% installed.packages()[, "Package"]]
+if (length(to_install) > 0) {
+  install.packages(to_install)
+}
+
+# 2. Load all packages normally
+for (pkg in packages) {
+  library(pkg, character.only = TRUE)
+}
+
+
+```
+
+Data upload
+
+```{r}
+
+
+# Set FRED API Key
+fredr_set_key("7339e3964ef6a4c8ea9c9ee462251872")
+
+# Define mapping from state names to FRED series IDs
+
+state_map <- c(
+  "South Dakota"       = "SDUR",
+  "Nebraska"           = "NEUR",
+  "Utah"                = "UTUR",
+  "North Dakota"       = "NDUR",
+  "Alabama"            = "ALUR",
+  "Kansas"             = "KSUR",
+  "Montana"            = "MTUR",
+  "New Hampshire"      = "NHUR",
+  "Idaho"              = "IDUR",
+  "Vermont"            = "VTUR",
+  "Minnesota"          = "MNUR",
+  "Virginia"           = "VAUR",
+  "Wisconsin"          = "WIUR",
+  "Georgia"            = "GAUR",
+  "Indiana"            = "INUR",
+  "Iowa"               = "IAUR",
+  "South Carolina"     = "SCUR",
+  "Arkansas"           = "ARUR",
+  "Oklahoma"           = "OKUR",
+  "Missouri"           = "MOUR",
+  "Kentucky"           = "KYUR",
+  "Tennessee"          = "TNUR",
+  "Wyoming"            = "WYUR",
+  "Florida"            = "FLUR",
+  "Maine"              = "MEUR",
+  "North Carolina"     = "NCUR",
+  "Arizona"            = "AZUR",
+  "West Virginia"      = "WVUR",
+  "Maryland"           = "MDUR",
+  "Oregon"             = "ORUR",
+  "Washington"         = "WAUR",
+  "Massachusetts"      = "MAUR",
+  "Ohio"               = "OHUR",
+  "Delaware"           = "DEUR",
+  "Mississippi"        = "MSUR",
+  "Colorado"           = "COUR",
+  "Louisiana"          = "LAUR",
+  "Rhode Island"       = "RIUR",
+  "Texas"              = "TXUR",
+  "Michigan"           = "MIUR",
+  "Pennsylvania"       = "PAUR",
+  "Hawaii"             = "HIUR",
+  "Illinois"           = "ILUR",
+  "Alaska"             = "AKUR",
+  "Connecticut"        = "CTUR",
+  "New Jersey"         = "NJUR",
+  "District of Columbia" = "DCUR",
+  "Nevada"             = "NVUR",
+  "New Mexico"         = "NMUR",
+  "New York"           = "NYUR",
+  "California"         = "CAUR"
+)
+# （
+
+# Fetch each series and combine into one data frame
+series_ids <- unname(state_map)
+df_fred <- map_df(series_ids, function(sid) {
+  fredr(
+    series_id         = sid,
+    observation_start = as.Date("2016-01-01"),
+    observation_end   = as.Date("2020-12-31")
+  ) %>%
+    select(date, value) %>%
+    mutate(series_id = sid)
+})
+
+# Add state name, year, and period columns
+final_data <- df_fred %>%
+  mutate(
+    state  = names(state_map)[match(series_id, state_map)],
+    year   = as.integer(format(date, "%Y")),
+    period = paste0("M", format(date, "%m"))
+  ) %>%
+  select(state, year, period, value)
+
+# View the result
+print(final_data)
+
+```
+
+
+
+
+
+
+
+```{r}
+
+# PART 1: Read education data for each year and combine
+years <- 2016:2020
+
+edu_df <- map_dfr(years, function(yr) {
+  # Adjusted path to point inside the data/ directory
+  path <- file.path("data", paste0("NCES", yr, ".xls"))
+  
+  read_excel(path, skip = 5, col_names = FALSE) %>%
+    select(
+      state                  = ...1,   # state name
+      high_school_completion = ...2,   # high school completion rate Total (%)
+      bachelor_or_higher     = ...20   # bachelor's degree or higher Total (%)
+    ) %>%
+    mutate(
+      state                  = str_trim(state),
+      high_school_completion = as.numeric(high_school_completion),
+      bachelor_or_higher     = as.numeric(bachelor_or_higher),
+      year                   = yr
+    )
+})
+
+# Check the structure
+print(edu_df)
+
+
+```
+
+```{r}
+# data cleaning
+
+# missing value check
+
+# 1. edu_df missing value
+edu_df %>% 
+  summarise(across(everything(), ~ sum(is.na(.)), .names = "miss_{col}")) %>%
+  print()
+
+# 2. yearly_unemp missing value
+final_data %>% 
+  summarise(across(everything(), ~ sum(is.na(.)), .names = "miss_{col}")) %>%
+  print()
+
+
+```
+```{r}
+
+# Compute annual average unemployment rate by state
+yearly_unemp <- final_data %>%
+  group_by(state, year) %>%
+  summarise(
+    avg_unemp_rate = mean(value, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+# View the annual series
+print(yearly_unemp)
+```
+
+
+```{r}
+#data cleaning:
+
+# Clean and merge education + unemployment data
+
+# Clean education data: remove trailing whitespace/punctuation, standardize case
+edu_clean <- edu_df %>%
+  mutate(
+    state = str_remove(state, "[\\s[:punct:]]+$"),
+    state = str_to_title(state)
+  ) %>%
+  filter(!state %in% c("1", "United States"))%>%
+  drop_na(high_school_completion, bachelor_or_higher)
+
+# 2.2 Clean unemployment data: same trimming
+unemp_clean <- yearly_unemp %>%
+  mutate(
+    state = str_to_title(state)
+  )
+
+
+```
+
+
+```{r}
+
+
+
+# Verify that all states for 2016–17 match
+
+# If no output appears, all states for those years have matched.
+
+# Perform the full left join and drop any missing values
+merged_df <- left_join(edu_clean, unemp_clean, by = c("state","year"))
+
+```
+
+
+```{r}
+num_vars <- merged_df %>% 
+  select(high_school_completion, bachelor_or_higher, avg_unemp_rate)
+
+#  boxplot.stats()
+outlier_counts_1 <- sapply(num_vars, function(x) {
+  length(boxplot.stats(x)$out)
+})
+print(outlier_counts_1)
+```
+
+
+
+
+
+
+```{r, warning = FALSE}
+
+# Scatter plots (Education vs. Unemployment)
+
+# High school completion vs. unemployment rate
+ggplot(merged_df, aes(x = high_school_completion, y = avg_unemp_rate)) +
+  geom_point(color = "steelblue", size = 2) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkred") +
+  labs(title = "High School Completion vs Unemployment Rate ",
+       x     = "High School Completion Rate (%)",
+       y     = "Unemployment Rate (%)") +
+  theme_minimal()
+
+# Bachelor's degree rate vs. unemployment rate
+ggplot(merged_df, aes(x = bachelor_or_higher, y = avg_unemp_rate)) +
+  geom_point(color = "darkgreen", size = 2) +
+  geom_smooth(method = "lm", se = TRUE, color = "red") +
+  labs(title = "Bachelor's Degree or Higher vs Unemployment Rate",
+       x     = "Bachelor's Degree or Higher (%)",
+       y     = "Unemployment Rate (%)") +
+  theme_minimal()
+
+# High school vs. bachelor's degree relationship
+ggplot(merged_df, aes(x = high_school_completion, y = bachelor_or_higher)) +
+  geom_point(color = "purple", size = 2) +
+  geom_smooth(method = "lm", se = TRUE, color = "orange") +
+  labs(title = "High School vs Bachelor's Completion Rates",
+       x     = "High School Completion Rate (%)",
+       y     = "Bachelor's Degree or Higher (%)") +
+  theme_minimal()
+
+```
+
+
+```{r}
+# Trend of average unemployment rate over years
+yearly_trend <- merged_df %>%
+  group_by(year) %>%
+  summarise(
+    avg_unemp_rate = mean(avg_unemp_rate, na.rm = TRUE)
+  )
+
+# Plot line chart
+ggplot(yearly_trend, aes(x = year, y = avg_unemp_rate)) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "Average Unemployment Rate by Year (2016–2020)",
+    x     = "Year",
+    y     = "Average Unemployment Rate (%)"
+  ) +
+  scale_x_continuous(breaks = 2016:2020) +
+  theme_minimal()
+
+
+
+```
+
+
+
+
+
+```{r}
+# Bar charts – Top/Bottom 10 States
+
+# Top 10 by 5-year avg bachelor's rate
+avg_bach_states <- merged_df %>%
+  group_by(state) %>%
+  summarise(mean_bach = mean(bachelor_or_higher, na.rm = TRUE)) %>%
+  slice_max(mean_bach, n = 10)
+
+ggplot(avg_bach_states, aes(
+    x = fct_reorder(state, mean_bach),
+    y = mean_bach
+  )) +
+  geom_col(fill = "steelblue", width = 0.7) +
+  coord_flip() +
+  scale_y_continuous(
+    labels = percent_format(scale = 1),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  labs(
+    title = "Top 10 States by 5-Year Avg Bachelor’s Rate (2016–2020)",
+    x     = NULL,
+    y     = "Avg Bachelor’s Degree or Higher (%)"
+  ) +
+  theme_minimal(base_size = 12)
+
+
+```
+
+
+
+```{r}
+# Top 10 by 5-year avg unemployment rate
+avg_unemp_states <- merged_df %>%
+  group_by(state) %>%
+  summarise(mean_unemp = mean(avg_unemp_rate, na.rm = TRUE)) %>%
+  slice_max(mean_unemp, n = 10)
+
+ggplot(avg_unemp_states, aes(
+    x = fct_reorder(state, mean_unemp),
+    y = mean_unemp
+  )) +
+  geom_col(fill = "firebrick", width = 0.7) +
+  coord_flip() +
+  scale_y_continuous(
+    labels = percent_format(scale = 1),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  labs(
+    title = "Top 10 States by 5-Year Avg Unemployment Rate (2016–2020)",
+    x     = NULL,
+    y     = "Avg Unemployment Rate (%)"
+  ) +
+  theme_minimal(base_size = 12)
+
+```
+
+
+
+```{r}
+
+# Choropleth maps for each year
+
+# 1. Prepare data in long format for bachelor’s degree rate
+df_bach_long <- merged_df %>%
+  filter(year %in% 2016:2020) %>%
+  transmute(
+    region = tolower(state),
+    year,
+    value  = bachelor_or_higher
+  )
+
+# 2. Retrieve state boundary data
+states_map <- map_data("state")
+
+# 3. Merge map data with education data
+map_df <- left_join(states_map, df_bach_long, by = "region")
+
+# 4. Plot all years in one faceted map
+ggplot(map_df, aes(x = long, y = lat, group = group, fill = value)) +
+  geom_polygon(color = "white", size = 0.2) +
+  coord_fixed(1.3) +
+  scale_fill_viridis_c(
+    option    = "plasma",
+    na.value  = "grey90",
+    name      = "Bachelor’s (%)"
+  ) +
+  facet_wrap(~ year, ncol = 3) +
+  labs(
+    title    = "Bachelor’s Degree or Higher by State (2016–2020)",
+    subtitle = "Each panel represents one year",
+    caption  = "Source: NCES"
+  ) +
+  theme_void() +
+  theme(
+    strip.text    = element_text(face = "bold"),
+    plot.title    = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+```{r}
+# Map of average unemployment rate
+df_unemp_long <- merged_df %>%
+  filter(year %in% 2016:2020) %>%
+  transmute(
+    region = tolower(state),
+    year,
+    value  = avg_unemp_rate
+  )
+
+# 2. Get US state boundaries
+states_map <- map_data("state")
+
+# 3. Merge map data with unemployment data
+map_unemp_df <- left_join(states_map, df_unemp_long, by = "region")
+
+# 4. Plot all years in one faceted map
+ggplot(map_unemp_df, aes(x = long, y = lat, group = group, fill = value)) +
+  geom_polygon(color = "white", size = 0.2) +
+  coord_fixed(1.3) +
+  scale_fill_viridis_c(
+    option   = "plasma",
+    na.value = "grey90",
+    name     = "Unemployment (%)"
+  ) +
+  facet_wrap(~ year, ncol = 3) +
+  labs(
+    title    = "Average Unemployment Rate by State (2016–2020)",
+    subtitle = "Faceted by Year",
+    caption  = "Source: FRED via fredr"
+  ) +
+  theme_void() +
+  theme(
+    strip.text    = element_text(face = "bold"),
+    plot.title    = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+
+
+
+```{r}
+# 1. Fit the linear model with high school completion, bachelor’s rate, and year as predictors
+fit <- lm(avg_unemp_rate ~ high_school_completion + bachelor_or_higher,
+          data = merged_df)
+
+# 2. Display the regression summary: coefficients, R-squared, and p-values
+summary(fit)
+
+# 3. Arrange the plotting area into 2 rows and 2 columns
+par(mfrow = c(2, 2))
+
+# 4. Draw diagnostic plots 1–4: 
+#    1) Residuals vs Fitted, 
+#    2) Normal Q-Q, 
+#    3) Scale-Location, 
+#    4) Cook's Distance
+plot(fit, which = 1:4)
+
+```
+
+
+
+
+
+
+
